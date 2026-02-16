@@ -3,9 +3,10 @@ from ultralytics import YOLO
 from PIL import Image
 import numpy as np
 import pandas as pd
-import io
 
-# --- 1. PAGE CONFIGURATION & STYLING ---
+# =========================
+# 1. PAGE CONFIG
+# =========================
 st.set_page_config(
     page_title="AutoInspect AI - Intelligent Damage Assessment",
     page_icon="🚗",
@@ -13,187 +14,188 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for a cleaner, professional look
+# =========================
+# 2. FIXED CSS (DARK + LIGHT SAFE)
+# =========================
 st.markdown("""
-    <style>
-    .main { background-color: #f9f9f9; }
-    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-    h1, h2, h3 { color: #2c3e50; }
-    </style>
-    """, unsafe_allow_html=True)
+<style>
+.main {
+    background-color: #0e1117;
+}
 
-# --- 2. LOGIC & HELPER FUNCTIONS ---
+/* Metric cards FIX */
+[data-testid="stMetric"] {
+    background-color: #ffffff !important;
+    padding: 16px;
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+}
 
-def calculate_severity(box_area, image_area, confidence):
-    """
-    Heuristic to determine severity based on damage size relative to vehicle size
-    and model confidence.
-    """
+[data-testid="stMetric"] label {
+    color: #000000 !important;
+    font-weight: 600;
+}
+
+[data-testid="stMetric"] div {
+    color: #000000 !important;
+    font-size: 26px;
+    font-weight: 700;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# =========================
+# 3. HELPER FUNCTIONS
+# =========================
+def calculate_severity(box_area, image_area):
     ratio = box_area / image_area
-    
-    if ratio < 0.02: # Less than 2% of the image
-        severity = "Low"
-    elif ratio < 0.10: # Between 2% and 10%
-        severity = "Medium"
-    else: # Greater than 10%
-        severity = "High"
-        
-    return severity
+
+    if ratio < 0.02:
+        return "Low"
+    elif ratio < 0.10:
+        return "Medium"
+    else:
+        return "High"
+
 
 def categorize_damage_type(label):
-    """Classifies damage into Cosmetic vs. Functional."""
-    functional_keywords = ['crack', 'broken', 'missing', 'glass', 'lamp']
-    label_lower = label.lower()
-    
-    if any(k in label_lower for k in functional_keywords):
+    functional_keywords = ['glass', 'broken', 'crack', 'lamp']
+    if any(k in label.lower() for k in functional_keywords):
         return "Functional (Critical)"
     return "Cosmetic (Surface)"
 
+
 @st.cache_resource
-def load_model(model_path):
-    """Loads and caches the YOLO model."""
-    try:
-        return YOLO(model_path)
-    except Exception as e:
-        st.error(f"Error loading model: {e}")
-        return None
+def load_model(path):
+    return YOLO(path)
 
-# --- 3. MAIN APPLICATION ---
-
+# =========================
+# 4. MAIN APP
+# =========================
 def main():
-    # --- Sidebar: Controls ---
+
+    # -------- Sidebar --------
     with st.sidebar:
         st.title("⚙️ Inspection Settings")
-        st.info("Upload a clear image of the vehicle.")
-        
-        conf_threshold = st.slider("Confidence Threshold", 0.0, 1.0, 0.25, 
-                                   help="Minimum probability to consider a detection valid.")
-        
-        # Placeholder for model selection if you have multiple versions
-        model_version = "best.pt" 
-        
-    # --- Main Content ---
+        st.info("Upload a clear vehicle image")
+
+        conf_threshold = st.slider(
+            "Confidence Threshold",
+            0.0, 1.0, 0.25
+        )
+
+    # -------- Header --------
     st.title("🚗 AutoInspect AI")
-    st.markdown("#### Intelligent Vehicle Damage Detection & Assessment System")
-    st.write("Upload an image to generate a standardized damage report for insurance or repair estimation.")
-    
-    # Model Loading
-    model = load_model(model_version)
-    if not model:
-        st.stop()
+    st.markdown("### Intelligent Vehicle Damage Detection & Assessment System")
 
-    # File Uploader
-    uploaded_file = st.file_uploader("Drop vehicle image here...", type=["jpg", "png", "jpeg"])
+    # -------- Load Model --------
+    model = load_model("best.pt")
 
-    if uploaded_file is not None:
-        try:
-            # Load and Preprocess
-            image = Image.open(uploaded_file).convert("RGB")
-            img_array = np.array(image)
-            height, width, _ = img_array.shape
-            image_area = height * width
+    # -------- Upload --------
+    uploaded_file = st.file_uploader(
+        "Drop vehicle image here...",
+        type=["jpg", "png", "jpeg"]
+    )
 
-            # --- DETECTION PHASE ---
-            with st.spinner("Analyzing vehicle surface..."):
-                results = model.predict(img_array, conf=conf_threshold)
+    if uploaded_file is None:
+        st.info("👆 Upload an image to begin inspection")
+        return
 
-            # --- RESULTS PROCESSING ---
-            detected_objects = []
-            
-            # Extract data from YOLO results
-            if results and len(results[0].boxes) > 0:
-                for box in results[0].boxes:
-                    # Bounding Box Coordinates
-                    x1, y1, x2, y2 = box.xyxy[0].tolist()
-                    box_w = x2 - x1
-                    box_h = y2 - y1
-                    box_area = box_w * box_h
-                    
-                    # Metadata
-                    cls = int(box.cls[0])
-                    conf = float(box.conf[0])
-                    label = model.names[cls]
-                    
-                    # Business Logic
-                    severity = calculate_severity(box_area, image_area, conf)
-                    category = categorize_damage_type(label)
-                    
-                    detected_objects.append({
-                        "Type": label.title(),
-                        "Category": category,
-                        "Confidence": f"{conf:.1%}",
-                        "Severity": severity,
-                        "Box Area (px)": int(box_area)
-                    })
-            
-            # --- DASHBOARD LAYOUT ---
-            
-            # If no damage detected
-            if not detected_objects:
-                st.success("✅ No visible exterior damage detected.")
-                st.image(image, caption="Original Image", use_container_width=True)
-                return
+    # -------- Image Processing --------
+    image = Image.open(uploaded_file).convert("RGB")
+    img_array = np.array(image)
+    h, w, _ = img_array.shape
+    image_area = h * w
 
-            # If damage detected, show Tabs
-            tab1, tab2 = st.tabs(["🔍 Visual Analysis", "📋 Detailed Report"])
-            
-            with tab1:
-                col1, col2 = st.columns([2, 1])
-                
-                with col1:
-                    # Generate Annotated Image
-                    annotated_img = results[0].plot() # YOLO's built-in plotter
-                    st.image(annotated_img, caption="AI Detection Overlay", use_container_width=True)
-                
-                with col2:
-                    st.subheader("Quick Summary")
-                    df = pd.DataFrame(detected_objects)
-                    
-                    # KPIs
-                    total_damages = len(df)
-                    high_sev_count = len(df[df['Severity'] == 'High'])
-                    
-                    st.metric("Total Defects", total_damages)
-                    st.metric("Critical / High Severity", high_sev_count, 
-                              delta_color="inverse" if high_sev_count > 0 else "normal")
-                    
-                    st.divider()
-                    st.caption("Common Defects Detected:")
-                    st.write(df['Type'].value_counts())
+    with st.spinner("🔍 Analyzing vehicle surface..."):
+        results = model.predict(img_array, conf=conf_threshold)
 
-            with tab2:
-                st.subheader("Assessment Report")
-                
-                # Color coding for dataframe
-                def color_severity(val):
-                    color = 'red' if val == 'High' else 'orange' if val == 'Medium' else 'green'
-                    return f'color: {color}; font-weight: bold'
+    detected_objects = []
 
-                st.dataframe(
-                    df.style.map(color_severity, subset=['Severity']), 
-                    use_container_width=True,
-                    hide_index=True
-                )
-                
-                # Actionable Insight
-                st.info("""
-                **Recommendation Logic:**
-                * **High Severity:** Immediate professional inspection required. Likely structural or glass replacement.
-                * **Medium:** Repair shop visit recommended for dent pulling or panel repainting.
-                * **Low:** Cosmetic buffing or touch-up paint may suffice.
-                """)
-                
-                # Download Report Button (Simulated)
-                csv = df.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="📥 Download Inspection CSV",
-                    data=csv,
-                    file_name='vehicle_damage_report.csv',
-                    mime='text/csv',
-                )
+    if results and len(results[0].boxes) > 0:
+        for box in results[0].boxes:
+            x1, y1, x2, y2 = box.xyxy[0].tolist()
+            box_area = (x2 - x1) * (y2 - y1)
 
-        except Exception as e:
-            st.error(f"An error occurred while processing the image: {e}")
+            cls = int(box.cls[0])
+            conf = float(box.conf[0])
+            label = model.names[cls]
+
+            detected_objects.append({
+                "Type": label.title(),
+                "Category": categorize_damage_type(label),
+                "Confidence": f"{conf:.1%}",
+                "Severity": calculate_severity(box_area, image_area),
+                "Box Area (px)": int(box_area)
+            })
+
+    # -------- No Damage Case --------
+    if not detected_objects:
+        st.success("✅ No visible exterior damage detected")
+        st.image(image, use_container_width=True)
+        return
+
+    df = pd.DataFrame(detected_objects)
+
+    # =========================
+    # 5. TABS
+    # =========================
+    tab1, tab2 = st.tabs(["🔍 Visual Analysis", "📋 Detailed Report"])
+
+    # -------- TAB 1 --------
+    with tab1:
+        col1, col2 = st.columns([2, 1])
+
+        with col1:
+            annotated = results[0].plot()
+            st.image(annotated, caption="AI Detection Overlay", use_container_width=True)
+
+        with col2:
+            st.subheader("Quick Summary")
+
+            total_damages = len(df)
+            high_sev = len(df[df["Severity"] == "High"])
+
+            st.metric("Total Defects", total_damages)
+            st.metric("Critical / High Severity", high_sev)
+
+            st.divider()
+            st.caption("Common Defects Detected")
+            st.write(df["Type"].value_counts())
+
+    # -------- TAB 2 --------
+    with tab2:
+        st.subheader("Assessment Report")
+
+        def color_severity(val):
+            if val == "High":
+                return "color:red;font-weight:bold"
+            elif val == "Medium":
+                return "color:orange;font-weight:bold"
+            else:
+                return "color:green;font-weight:bold"
+
+        st.dataframe(
+            df.style.map(color_severity, subset=["Severity"]),
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.info("""
+        **Repair Recommendation Logic**
+        - **High:** Immediate professional inspection
+        - **Medium:** Repair shop visit recommended
+        - **Low:** Cosmetic fix sufficient
+        """)
+
+        csv = df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "📥 Download Inspection CSV",
+            csv,
+            "vehicle_damage_report.csv",
+            "text/csv"
+        )
+
 
 if __name__ == "__main__":
     main()
