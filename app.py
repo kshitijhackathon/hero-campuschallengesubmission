@@ -1,12 +1,13 @@
+import os
+os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
 import streamlit as st
 from ultralytics import YOLO
 from PIL import Image
 import numpy as np
 import pandas as pd
 
-# =========================
-# 1. PAGE CONFIG
-# =========================
 st.set_page_config(
     page_title="AutoInspect AI - Intelligent Damage Assessment",
     page_icon="🚗",
@@ -14,28 +15,21 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# =========================
-# 2. FIXED CSS (DARK + LIGHT SAFE)
-# =========================
 st.markdown("""
 <style>
 .main {
     background-color: #0e1117;
 }
-
-/* Metric cards FIX */
 [data-testid="stMetric"] {
     background-color: #ffffff !important;
     padding: 16px;
     border-radius: 12px;
     box-shadow: 0 4px 12px rgba(0,0,0,0.25);
 }
-
 [data-testid="stMetric"] label {
     color: #000000 !important;
     font-weight: 600;
 }
-
 [data-testid="stMetric"] div {
     color: #000000 !important;
     font-size: 26px;
@@ -44,12 +38,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# =========================
-# 3. HELPER FUNCTIONS
-# =========================
 def calculate_severity(box_area, image_area):
     ratio = box_area / image_area
-
     if ratio < 0.02:
         return "Low"
     elif ratio < 0.10:
@@ -57,41 +47,27 @@ def calculate_severity(box_area, image_area):
     else:
         return "High"
 
-
 def categorize_damage_type(label):
     functional_keywords = ['glass', 'broken', 'crack', 'lamp']
     if any(k in label.lower() for k in functional_keywords):
         return "Functional (Critical)"
     return "Cosmetic (Surface)"
 
-
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def load_model(path):
     return YOLO(path)
 
-# =========================
-# 4. MAIN APP
-# =========================
 def main():
-
-    # -------- Sidebar --------
     with st.sidebar:
         st.title("⚙️ Inspection Settings")
         st.info("Upload a clear vehicle image")
+        conf_threshold = st.slider("Confidence Threshold", 0.0, 1.0, 0.25)
 
-        conf_threshold = st.slider(
-            "Confidence Threshold",
-            0.0, 1.0, 0.25
-        )
-
-    # -------- Header --------
     st.title("🚗 AutoInspect AI")
     st.markdown("### Intelligent Vehicle Damage Detection & Assessment System")
 
-    # -------- Load Model --------
     model = load_model("best.pt")
 
-    # -------- Upload --------
     uploaded_file = st.file_uploader(
         "Drop vehicle image here...",
         type=["jpg", "png", "jpeg"]
@@ -101,14 +77,18 @@ def main():
         st.info("👆 Upload an image to begin inspection")
         return
 
-    # -------- Image Processing --------
     image = Image.open(uploaded_file).convert("RGB")
     img_array = np.array(image)
     h, w, _ = img_array.shape
     image_area = h * w
 
     with st.spinner("🔍 Analyzing vehicle surface..."):
-        results = model.predict(img_array, conf=conf_threshold)
+        results = model.predict(
+            img_array,
+            conf=conf_threshold,
+            device="cpu",
+            verbose=False
+        )
 
     detected_objects = []
 
@@ -116,7 +96,6 @@ def main():
         for box in results[0].boxes:
             x1, y1, x2, y2 = box.xyxy[0].tolist()
             box_area = (x2 - x1) * (y2 - y1)
-
             cls = int(box.cls[0])
             conf = float(box.conf[0])
             label = model.names[cls]
@@ -129,7 +108,6 @@ def main():
                 "Box Area (px)": int(box_area)
             })
 
-    # -------- No Damage Case --------
     if not detected_objects:
         st.success("✅ No visible exterior damage detected")
         st.image(image, use_container_width=True)
@@ -137,33 +115,24 @@ def main():
 
     df = pd.DataFrame(detected_objects)
 
-    # =========================
-    # 5. TABS
-    # =========================
     tab1, tab2 = st.tabs(["🔍 Visual Analysis", "📋 Detailed Report"])
 
-    # -------- TAB 1 --------
     with tab1:
         col1, col2 = st.columns([2, 1])
 
         with col1:
             annotated = results[0].plot()
+            annotated = Image.fromarray(annotated)
             st.image(annotated, caption="AI Detection Overlay", use_container_width=True)
 
         with col2:
             st.subheader("Quick Summary")
-
-            total_damages = len(df)
-            high_sev = len(df[df["Severity"] == "High"])
-
-            st.metric("Total Defects", total_damages)
-            st.metric("Critical / High Severity", high_sev)
-
+            st.metric("Total Defects", len(df))
+            st.metric("Critical / High Severity", len(df[df["Severity"] == "High"]))
             st.divider()
             st.caption("Common Defects Detected")
             st.write(df["Type"].value_counts())
 
-    # -------- TAB 2 --------
     with tab2:
         st.subheader("Assessment Report")
 
@@ -195,7 +164,6 @@ def main():
             "vehicle_damage_report.csv",
             "text/csv"
         )
-
 
 if __name__ == "__main__":
     main()
